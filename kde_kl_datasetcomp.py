@@ -30,13 +30,9 @@ def compute_kde(data, bandwidth='silverman'):
     :return: 核密度估计对象
     """
     if bandwidth == 'silverman':
-        bw_method = 1.06  # Silverman's rule multiplier relative to Scott's rule
-    elif bandwidth == 'scott':
-        bw_method = 'scott'
-    else:
-        bw_method = bandwidth  # 假设用户传入的是带宽因子
+        bandwidth = silverman_bandwidth(data)
 
-    kde = gaussian_kde(data, bw_method=bw_method)
+    kde = gaussian_kde(data, bw_method=bandwidth)
     return kde
 
 # KL散度计算函数
@@ -170,7 +166,7 @@ def main():
     print(f"使用 {num_cores} 核心进行并行处理...")
 
     # 使用 joblib 进行并行处理
-    results = Parallel(n_jobs=num_cores)(
+    results = Parallel(n_jobs=num_cores, prefer="threads")(
         delayed(process_feature)(name, features[name], epsilon, increment, bandwidth) for name in features
     )
 
