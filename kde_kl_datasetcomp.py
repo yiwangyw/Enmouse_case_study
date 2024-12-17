@@ -93,8 +93,8 @@ def determine_data_sufficiency(data, epsilon=1e-4, increment=100, bandwidth='sil
         xmin, xmax = min(data[:i]), max(data[:i])
 
         # 生成x范围上的KDE结果，num_points自动设置为当前数据量
-        num_points = i  # 使用当前数据量作为num_points
-        x = np.linspace(xmin, xmax, num_points)
+        # num_points = i  # 使用当前数据量作为num_points
+        x = np.linspace(xmin, xmax, n)
         p = kde1(x)
         q = kde2(x)
 
