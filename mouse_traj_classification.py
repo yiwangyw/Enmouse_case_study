@@ -27,21 +27,29 @@ class MouseNeuralNetwork(nn.Module):
 
 
     def forward(self, input):
-        # input shape: (batch_size, num_features=11, sequence_length)
-        # 通过 ResNet1D 提取特征
-        x = self.resnet(input)  # [batch, 512]
+        """
+        前向传播
 
+        Args:
+            input: 张量，形状为 [batch_size, num_features=11, sequence_length]
+
+        Returns:
+            输出分类结果，形状为 [batch_size, 2]
+        """
+        # 通过 ResNet1D 提取特征
+        x = self.resnet(input)  # [batch, 512, seq_len_reduced]
+
+        # 调整维度以匹配 GRU 的输入要求
+        x = x.permute(0, 2, 1)  # [batch, seq_len_reduced, 512]
 
         # 通过 GRU
-        x = x.unsqueeze(1) 
-        x, _ = self.gru(x)  # x: [batch, 2, 25]
-        # print(x.shape)
-        # 去掉时间维度: [batch, 25]
-        x = x.squeeze(1)
+        x, _ = self.gru(x)  # x: [batch, seq_len_reduced, 25]
 
-        # 全连接层输出分类结果: [batch, 2]
-        x = self.fc2(x)
-        # print(x.shape)#torch.Size([100, 2])
+        # 使用 GRU 最后一个时间步的输出进行分类
+        x = x[:, -1, :]  # [batch, 25]
+
+        # 全连接层输出分类结果
+        x = self.fc2(x)  # [batch, 2]
 
         return x
 
