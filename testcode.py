@@ -24,9 +24,9 @@ class BalancedBatchDataset(Dataset):
         self.labels = labels
         self.batch_size = batch_size
         
-        # 分离正负样本
-        pos_indices = (labels == 1).nonzero(as_tuple=True)[0]
-        neg_indices = (labels == 0).nonzero(as_tuple=True)[0]
+        # 分离正负样本 (0为正样本，1为负样本)
+        pos_indices = (labels == 0).nonzero(as_tuple=True)[0]
+        neg_indices = (labels == 1).nonzero(as_tuple=True)[0]
         
         # 如果没有指定正样本比例，使用原始数据中的比例
         if pos_ratio is None:
@@ -99,7 +99,7 @@ def load_test_data():
         y = torch.stack([t[1] for t in tensors])
         
         # 计算原始正样本比例
-        pos_ratio = (y == 1).float().mean().item()
+        pos_ratio = (y == 0).float().mean().item()  # 修改：0为正样本
         
         return create_balanced_dataloader(X, y, Config.BATCH_SIZE, pos_ratio)
     except Exception as e:
@@ -112,9 +112,10 @@ def load_new_test_data():
         file_path = os.path.join(Config.get_data_dir(), 
                                 f'predict_samples_user{Config.USER_ID}_{Config.WINDOW_SIZE}.csv')
         X_insert = np.loadtxt(file_path, delimiter=',', skiprows=1)
-        X_insert = torch.from_numpy(X_insert).to(torch.float32)  # 先转换为CPU张量
+        X_insert = torch.from_numpy(X_insert).to(torch.float32)
         X_insert = X_insert.unsqueeze(dim=1)
-        label_insert = torch.zeros((len(X_insert))).to(torch.int64)  # 先创建在CPU上的张量
+        # 修改：将标签设置为1（负样本）
+        label_insert = torch.ones((len(X_insert))).to(torch.int64)
         return X_insert, label_insert
     except Exception as e:
         print(f"Error loading new test data: {str(e)}")
@@ -131,7 +132,7 @@ def insert_new_test_data(test_loader, X_insert, label_insert):
     y_combined = torch.cat([y_orig, label_insert])
     
     # 计算新的正样本比例
-    pos_ratio = (y_combined == 1).float().mean().item()
+    pos_ratio = (y_combined == 0).float().mean().item()  # 修改：0为正样本
     
     return create_balanced_dataloader(X_combined, y_combined, Config.BATCH_SIZE, pos_ratio)
 
@@ -151,6 +152,12 @@ def save_results_to_csv(results_dict, test_type):
     except Exception as e:
         print(f"Error saving results to CSV: {str(e)}")
         raise
+
+# 分离正负样本
+        pos_indices = (labels == 1).nonzero(as_tuple=True)[0]
+        neg_indices = (labels == 0).nonzero(as_tuple=True)[0]
+
+
 
 def evaluate_model(model, data_loader):
     """评估模型性能"""
@@ -194,12 +201,17 @@ def evaluate_model(model, data_loader):
 
 def compute_metrics(pred_ids, scores, labels):
     """计算评估指标"""
-    precision = precision_score(labels, pred_ids)
-    recall = recall_score(labels, pred_ids)
-    f1 = f1_score(labels, pred_ids)
-    accuracy = accuracy_score(labels, pred_ids)
+    # 翻转预测和真实标签，使其符合正确的定义（0为正样本，1为负样本）
+    pred_ids_inv = 1 - pred_ids
+    labels_inv = 1 - labels
+    scores_inv = 1 - scores
     
-    fpr, tpr, _ = metrics.roc_curve(labels, scores)
+    precision = precision_score(labels_inv, pred_ids_inv)
+    recall = recall_score(labels_inv, pred_ids_inv)
+    f1 = f1_score(labels_inv, pred_ids_inv)
+    accuracy = accuracy_score(labels_inv, pred_ids_inv)
+    
+    fpr, tpr, _ = metrics.roc_curve(labels_inv, scores_inv)
     auc = metrics.auc(fpr, tpr)
     
     return precision, recall, f1, accuracy, auc, fpr, tpr
@@ -230,6 +242,7 @@ def plot_combined_metrics(original_results, new_results):
     plt.savefig(save_path)
     plt.close()
 
+
 def plot_combined_roc(original_data, new_data):
     """绘制组合ROC曲线"""
     plt.figure(figsize=(10, 8))
@@ -259,6 +272,15 @@ def plot_combined_roc(original_data, new_data):
     plt.savefig(save_path)
     plt.close()
 
+def verify_label_distribution(loader, dataset_name=""):
+    """验证标签分布"""
+    labels = torch.cat([batch[1] for batch in loader])
+    unique, counts = torch.unique(labels, return_counts=True)
+    print(f"\n{dataset_name} 标签分布:")
+    for label, count in zip(unique, counts):
+        print(f"标签 {label}: {count} 个样本 ({count/len(labels)*100:.2f}%)")
+    return counts
+
 def run_testing():
     """主测试函数"""
     try:
@@ -267,6 +289,8 @@ def run_testing():
         
         # 加载测试数据
         X_test_loader = load_test_data()
+        print("\n验证原始测试数据标签分布:")
+        verify_label_distribution(X_test_loader, "原始测试数据")
         
         # 加载新测试数据
         X_insert, label_insert = load_new_test_data()
@@ -274,6 +298,8 @@ def run_testing():
         # 获取数据形状
         shape_single_mouse_traj = read_test_data_shape(X_test_loader)
         new_test_dataloader = insert_new_test_data(X_test_loader, X_insert, label_insert)
+        print("\n验证合并后数据标签分布:")
+        verify_label_distribution(new_test_dataloader, "合并后数据")
         
         # 初始化和加载模型
         model = MouseNeuralNetwork(shape_single_mouse_traj[2]).to(Config.DEVICE)
@@ -344,3 +370,5 @@ def run_testing():
 
 if __name__ == "__main__":
     run_testing()
+
+
