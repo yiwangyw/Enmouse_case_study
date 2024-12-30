@@ -35,48 +35,98 @@ def compute_kde(data, bandwidth='silverman'):
     kde = gaussian_kde(data, bw_method=bandwidth)
     return kde
 
-# KL散度计算函数
-def compute_kl_divergence(kde1, kde2, xmin, xmax, num_points=None):
+# # KL散度计算函数
+# def compute_kl_divergence(kde1, kde2, xmin, xmax, num_points=None):
+#     """
+#     计算两个核密度估计之间的KL散度。
+#     :param kde1: 第一个核密度估计对象
+#     :param kde2: 第二个核密度估计对象
+#     :param xmin: 估计范围的最小值
+#     :param xmax: 估计范围的最大值
+#     :param num_points: 用于积分的点数，如果为None，则使用KDE1的数据点数
+#     :return: KL散度值
+#     """
+#     if num_points is None:
+#         num_points = len(kde1.dataset[0])  # 使用KDE对象中的数据量作为num_points
+
+#     x = np.linspace(xmin, xmax, num_points)
+#     p = kde1(x)
+#     q = kde2(x)
+
+#     # 添加一个小的常数以避免零值
+#     epsilon = 1e-10
+#     p = p + epsilon
+#     q = q + epsilon
+
+#     # 计算 p/q 并限制其最大值以防止溢出
+#     ratio = p / q
+#     max_ratio = 1e10  # 根据需要调整这个值
+#     ratio = np.clip(ratio, None, max_ratio)
+
+#     # 计算 KL 散度
+#     kl_div = np.sum(p * np.log(ratio)) * (xmax - xmin) / num_points
+
+#     # 检查是否有无穷大或NaN值
+#     if not np.isfinite(kl_div):
+#         print("警告：计算出的 KL 散度包含非有限值。")
+#         kl_div = np.inf  # 或者根据需求处理
+
+#     return kl_div
+
+# # 判断数据收敛的关键函数
+# def determine_data_sufficiency(data, epsilon=1e-4, increment=100, bandwidth='silverman'):
+#     """
+#     判断数据是否足够通过KL散度收敛。
+#     :param data: 输入数据 (numpy array)
+#     :param epsilon: KL散度收敛阈值
+#     :param increment: 每次增加的数据量
+#     :param bandwidth: KDE的带宽设置 ('silverman', 'scott' 或具体值)
+#     :return: 收敛时的数据量
+#     """
+#     n = len(data)
+#     for i in range(increment, n, increment):
+#         current_end = i + increment
+#         if current_end > n:
+#             current_end = n
+#         kde1 = compute_kde(data[:i], bandwidth)
+#         kde2 = compute_kde(data[:current_end], bandwidth)
+#         kde_n_2m = com
+#         xmin, xmax = min(data[:i]), max(data[:i])
+
+#         # 生成x范围上的KDE结果，num_points自动设置为当前数据量
+#         # num_points = i  # 使用当前数据量作为num_points
+#         x = np.linspace(xmin, xmax, 10000)
+#         p = kde1(x)
+#         q = kde2(x)
+
+#         # 归一化KDE结果
+#         dx = (xmax - xmin) / len(x)
+#         p_normalized = p / (np.sum(p) * dx)
+#         q_normalized = q / (np.sum(q) * dx)
+
+#         # 计算KL散度
+#         p_normalized = np.where(p_normalized > 0, p_normalized, 1e-10)
+#         q_normalized = np.where(q_normalized > 0, q_normalized, 1e-10)
+#         kl_div = np.sum(p_normalized * np.log(p_normalized / q_normalized)) * dx
+
+#         # 判断是否收敛
+#         if kl_div < epsilon:
+#             return i
+
+#     return n
+
+#============change=================
+def kl_divergence(p, q, dx):
     """
-    计算两个核密度估计之间的KL散度。
-    :param kde1: 第一个核密度估计对象
-    :param kde2: 第二个核密度估计对象
-    :param xmin: 估计范围的最小值
-    :param xmax: 估计范围的最大值
-    :param num_points: 用于积分的点数，如果为None，则使用KDE1的数据点数
-    :return: KL散度值
+    计算KL散度
     """
-    if num_points is None:
-        num_points = len(kde1.dataset[0])  # 使用KDE对象中的数据量作为num_points
+    p = np.where(p > 0, p, 1e-10)
+    q = np.where(q > 0, q, 1e-10)
+    return np.sum(p * np.log(p / q)) * dx
 
-    x = np.linspace(xmin, xmax, num_points)
-    p = kde1(x)
-    q = kde2(x)
-
-    # 添加一个小的常数以避免零值
-    epsilon = 1e-10
-    p = p + epsilon
-    q = q + epsilon
-
-    # 计算 p/q 并限制其最大值以防止溢出
-    ratio = p / q
-    max_ratio = 1e10  # 根据需要调整这个值
-    ratio = np.clip(ratio, None, max_ratio)
-
-    # 计算 KL 散度
-    kl_div = np.sum(p * np.log(ratio)) * (xmax - xmin) / num_points
-
-    # 检查是否有无穷大或NaN值
-    if not np.isfinite(kl_div):
-        print("警告：计算出的 KL 散度包含非有限值。")
-        kl_div = np.inf  # 或者根据需求处理
-
-    return kl_div
-
-# 判断数据收敛的关键函数
-def determine_data_sufficiency(data, epsilon=1e-4, increment=100, bandwidth='silverman'):
+def determine_data_sufficiency(data, epsilon_1=1e-4, epsilon_2=1e-5, increment=100, bandwidth='silverman'):
     """
-    判断数据是否足够通过KL散度收敛。
+    判断数据是否足够并验证收敛趋势。
     :param data: 输入数据 (numpy array)
     :param epsilon: KL散度收敛阈值
     :param increment: 每次增加的数据量
@@ -84,35 +134,43 @@ def determine_data_sufficiency(data, epsilon=1e-4, increment=100, bandwidth='sil
     :return: 收敛时的数据量
     """
     n = len(data)
-    for i in range(increment, n, increment):
+    previous_kl = None
+    
+    for i in range(increment, n - 2 * increment, increment):
         current_end = i + increment
-        if current_end > n:
-            current_end = n
-        kde1 = compute_kde(data[:i], bandwidth)
-        kde2 = compute_kde(data[:current_end], bandwidth)
-        xmin, xmax = min(data[:i]), max(data[:i])
+        next_end = i + 2 * increment
+        
+        if next_end > n:
+            next_end = n
+        
+        kde_n = compute_kde(data[:i], bandwidth)
+        kde_n_m = compute_kde(data[:current_end], bandwidth)
+        kde_n_2m = compute_kde(data[:next_end], bandwidth)
+        
 
-        # 生成x范围上的KDE结果，num_points自动设置为当前数据量
-        # num_points = i  # 使用当前数据量作为num_points
-        x = np.linspace(xmin, xmax, n)
-        p = kde1(x)
-        q = kde2(x)
-
-        # 归一化KDE结果
-        dx = (xmax - xmin) / len(x)
-        p_normalized = p / (np.sum(p) * dx)
-        q_normalized = q / (np.sum(q) * dx)
-
+        xmin, xmax = min(data[:next_end]), max(data[:next_end])
+        x = np.linspace(xmin, xmax, 10001)
+        dx = (xmax - xmin) / (len(x)-1)
+        
+        # KDE 密度估计
+        p = kde_n(x)
+        q = kde_n_m(x)
+        r = kde_n_2m(x)
+        
         # 计算KL散度
-        p_normalized = np.where(p_normalized > 0, p_normalized, 1e-10)
-        q_normalized = np.where(q_normalized > 0, q_normalized, 1e-10)
-        kl_div = np.sum(p_normalized * np.log(p_normalized / q_normalized)) * dx
-
-        # 判断是否收敛
-        if kl_div < epsilon:
-            return i
-
+        kl_n_m = kl_divergence(q, p, dx)
+        kl_n_2m = kl_divergence(r, q, dx)
+        
+        # 判断KL散度是否小于阈值
+        if kl_n_m < epsilon_1 and abs(kl_n_m - kl_n_2m) < epsilon_2:
+            print(f"数据在 {i + increment} 个样本时达到收敛。")
+            return i + increment
+        
+        previous_kl = kl_n_m
+    
+    print("数据未达到收敛，返回全部数据量。")
     return n
+#================fix==================
 
 def process_feature(feature_name, feature_data, epsilon, increment, bandwidth):
     """
