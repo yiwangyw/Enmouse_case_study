@@ -3,14 +3,14 @@ import torch
 class Config:
     # Global settings
     USER_ID = 9
-    WINDOW_SIZE = 100
-    BASE_PATH = "C:/Users/Admin/数据处理代码/"
-    BATCH_SIZE = 128
-    RANDOM_SEED = 3407
+    WINDOW_SIZE = 1
+    BASE_PATH = "/data/yanbo.wang/CCS2025/Enmouse_case_study/new/"
+    BATCH_SIZE = 512
+    RANDOM_SEED = 123  #0 7 42 123 3407  ��������
     NUM_EPOCHS = 200
     LEARNING_RATE = 1e-3
-    WEIGHT_DECAY = 1e-2
-    DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    WEIGHT_DECAY = 1e-3
+    DEVICE = torch.device('cuda:4' if torch.cuda.is_available() else 'cpu')
     
     # Training settings
     TRAIN_SPLIT = 0.7
@@ -28,3 +28,9 @@ class Config:
     
     def get_figures_path():
         return f"{Config.BASE_PATH}figures"
+
+    def get_Resnetloss_path():
+        return f"{Config.BASE_PATH}Resnetloss"
+
+    def get_Gruloss_path():
+        return f"{Config.BASE_PATH}Gruloss"

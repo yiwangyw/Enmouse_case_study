@@ -56,9 +56,9 @@ def main():
     print("Starting pipeline execution...")
     
     # Define the different window sizes and user IDs to test
-    window_sizes = [50, 100, 150,200,250,300]  # 添加您想要测试的窗口大小
-    user_ids = [20]  # 添加您想要测试的用户ID
-    
+    window_sizes =  list(range(10, 101, 10))  
+    # window_sizes = [10]
+    user_ids = [20]      
     # Run pipeline for each combination
     for window_size, user_id in product(window_sizes, user_ids):
         try:

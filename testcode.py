@@ -19,32 +19,43 @@ from mouse_traj_classification import MouseNeuralNetwork
 from data_utils import read_test_data_shape, ensure_cpu_tensor
 
 class BalancedBatchDataset(Dataset):
-    def __init__(self, tensors, labels, batch_size, pos_ratio=None):
+    def __init__(self, tensors, labels, batch_size):
         self.tensors = tensors
         self.labels = labels
         self.batch_size = batch_size
         
         # 分离正负样本 (0为正样本，1为负样本)
-        pos_indices = (labels == 0).nonzero(as_tuple=True)[0]
-        neg_indices = (labels == 1).nonzero(as_tuple=True)[0]
+        self.pos_indices = (labels == 0).nonzero(as_tuple=True)[0]
+        self.neg_indices = (labels == 1).nonzero(as_tuple=True)[0]
         
-        # 如果没有指定正样本比例，使用原始数据中的比例
-        if pos_ratio is None:
-            pos_ratio = len(pos_indices) / len(labels)
+        print(f"正样本数量: {len(self.pos_indices)}")
+        print(f"负样本数量: {len(self.neg_indices)}")
         
-        # 计算每个batch中的正负样本数量
-        self.pos_per_batch = int(batch_size * pos_ratio)
-        self.neg_per_batch = batch_size - self.pos_per_batch
+        # 计算正负样本比例
+        total_samples = len(labels)
+        self.pos_ratio = len(self.pos_indices) / total_samples
+        self.neg_ratio = len(self.neg_indices) / total_samples
         
-        # 打乱正负样本索引
-        self.pos_indices = pos_indices[torch.randperm(len(pos_indices))]
-        self.neg_indices = neg_indices[torch.randperm(len(neg_indices))]
+        # 根据比例计算每个batch中的正负样本数
+        self.pos_samples_per_batch = int(self.batch_size * self.pos_ratio)
+        self.neg_samples_per_batch = self.batch_size - self.pos_samples_per_batch
         
-        # 计算完整batch的数量
+        print(f"每个batch中的正样本数: {self.pos_samples_per_batch}")
+        print(f"每个batch中的负样本数: {self.neg_samples_per_batch}")
+        
+        # 计算可以构建的完整batch数量
         self.num_batches = min(
-            len(pos_indices) // self.pos_per_batch,
-            len(neg_indices) // self.neg_per_batch
+            len(self.pos_indices) // self.pos_samples_per_batch,
+            len(self.neg_indices) // self.neg_samples_per_batch
         )
+        
+        print(f"可构建的完整batch数量: {self.num_batches}")
+        
+        if self.num_batches == 0:
+            raise ValueError(f"无法创建batch。正样本: {len(self.pos_indices)}, "
+                           f"负样本: {len(self.neg_indices)}, "
+                           f"每个batch所需正样本: {self.pos_samples_per_batch}, "
+                           f"每个batch所需负样本: {self.neg_samples_per_batch}")
 
     def __len__(self):
         return self.num_batches
@@ -53,23 +64,29 @@ class BalancedBatchDataset(Dataset):
         if idx >= self.num_batches:
             raise IndexError("Index out of bounds")
         
+        # 为当前batch选择正负样本
+        start_pos = idx * self.pos_samples_per_batch
+        start_neg = idx * self.neg_samples_per_batch
+        
         # 获取当前batch的正负样本索引
-        pos_start = idx * self.pos_per_batch
-        neg_start = idx * self.neg_per_batch
+        batch_pos_indices = self.pos_indices[start_pos:start_pos + self.pos_samples_per_batch]
+        batch_neg_indices = self.neg_indices[start_neg:start_neg + self.neg_samples_per_batch]
         
-        batch_pos_indices = self.pos_indices[pos_start:pos_start + self.pos_per_batch]
-        batch_neg_indices = self.neg_indices[neg_start:neg_start + self.neg_per_batch]
-        
-        # 合并并打乱当前batch的索引
+        # 合并并打乱索引
         batch_indices = torch.cat([batch_pos_indices, batch_neg_indices])
         batch_indices = batch_indices[torch.randperm(len(batch_indices))]
         
-        # 返回batch数据
         return self.tensors[batch_indices], self.labels[batch_indices]
 
-def create_balanced_dataloader(tensors, labels, batch_size, pos_ratio=None):
-    dataset = BalancedBatchDataset(tensors, labels, batch_size, pos_ratio)
-    return DataLoader(dataset, batch_size=None, shuffle=False)
+def create_balanced_dataloader(tensors, labels, batch_size):
+    """创建保持原始比例的数据加载器"""
+    try:
+        dataset = BalancedBatchDataset(tensors, labels, batch_size)
+        loader = DataLoader(dataset, batch_size=None, shuffle=False)
+        print(f"数据加载器批次数: {len(loader)}")
+        return loader
+    except Exception as e:
+        raise ValueError(f"创建数据加载器失败: {str(e)}")
 
 def ensure_directories():
     """确保所需目录存在"""
@@ -86,55 +103,37 @@ def load_test_data():
     try:
         with open(test_path, 'rb') as f:
             test_dataset = pickle.load(f)
-            
-        # 确保数据集中的张量都在CPU上
         tensors = []
         for tensor, label in test_dataset:
             tensor = ensure_cpu_tensor(tensor)
             label = ensure_cpu_tensor(label)
             tensors.append((tensor, label))
-            
-        # 创建新的数据集
         X = torch.stack([t[0] for t in tensors])
         y = torch.stack([t[1] for t in tensors])
-        
-        # 计算原始正样本比例
-        pos_ratio = (y == 0).float().mean().item()  # 修改：0为正样本
-        
-        return create_balanced_dataloader(X, y, Config.BATCH_SIZE, pos_ratio)
+        return X, y
     except Exception as e:
-        print(f"Error loading test dataset: {str(e)}")
         raise
 
-def load_new_test_data():
+def load_new_test_data(num_samples_to_insert):
     """加载新的测试数据"""
     try:
         file_path = os.path.join(Config.get_data_dir(), 
                                 f'predict_samples_user{Config.USER_ID}_{Config.WINDOW_SIZE}.csv')
-        X_insert = np.loadtxt(file_path, delimiter=',', skiprows=1)
+        X_insert_all = np.loadtxt(file_path, delimiter=',', skiprows=1)
+        
+        if len(X_insert_all) < num_samples_to_insert:
+            raise ValueError(f"需要 {num_samples_to_insert} 个新样本，但只有 {len(X_insert_all)} 个可用")
+        
+        X_insert = X_insert_all[:num_samples_to_insert]
         X_insert = torch.from_numpy(X_insert).to(torch.float32)
         X_insert = X_insert.unsqueeze(dim=1)
-        # 修改：将标签设置为1（负样本）
-        label_insert = torch.ones((len(X_insert))).to(torch.int64)
+        label_insert = torch.ones(num_samples_to_insert).to(torch.int64)
+        
         return X_insert, label_insert
     except Exception as e:
-        print(f"Error loading new test data: {str(e)}")
         raise
 
-def insert_new_test_data(test_loader, X_insert, label_insert):
-    """插入新的测试数据并创建平衡的dataloader"""
-    # 获取原始数据
-    X_orig = torch.cat([batch[0] for batch in test_loader])
-    y_orig = torch.cat([batch[1] for batch in test_loader])
-    
-    # 合并原始数据和新数据
-    X_combined = torch.cat([X_orig, X_insert])
-    y_combined = torch.cat([y_orig, label_insert])
-    
-    # 计算新的正样本比例
-    pos_ratio = (y_combined == 0).float().mean().item()  # 修改：0为正样本
-    
-    return create_balanced_dataloader(X_combined, y_combined, Config.BATCH_SIZE, pos_ratio)
+
 
 def save_results_to_csv(results_dict, test_type):
     """保存结果到CSV文件"""
@@ -150,49 +149,34 @@ def save_results_to_csv(results_dict, test_type):
             df = new_row
         df.to_csv(filename, index=False)
     except Exception as e:
-        print(f"Error saving results to CSV: {str(e)}")
         raise
-
-# 分离正负样本
-        pos_indices = (labels == 1).nonzero(as_tuple=True)[0]
-        neg_indices = (labels == 0).nonzero(as_tuple=True)[0]
-
-
 
 def evaluate_model(model, data_loader):
     """评估模型性能"""
+    if len(data_loader) == 0:
+        raise ValueError("数据加载器为空，无法进行评估")
+        
     batch_metrics = []
-    total_inference_time = 0
-    num_inferences = 0
-
     model.eval()
     with torch.no_grad():
         for inputs, labels in data_loader:
             inputs = inputs.to(Config.DEVICE)
             labels = labels.to(Config.DEVICE)
             
-            start_time = time.time()
             logits = model(inputs)
             probs = torch.softmax(logits, dim=1)
             scores = probs[:, 1]
-            end_time = time.time()
-            
-            total_inference_time += (end_time - start_time)
-            num_inferences += inputs.size(0)
-            
             preds = torch.argmax(probs, dim=1)
             
-            # 计算当前batch的指标
             batch_metrics.append({
                 'preds': preds.cpu().numpy(),
                 'scores': scores.cpu().numpy(),
                 'labels': labels.cpu().numpy()
             })
             
-    avg_inference_time = total_inference_time / num_inferences
-    print(f"Average inference time: {avg_inference_time:.6f} seconds")
-    
-    # 合并所有batch的结果
+    if not batch_metrics:
+        raise ValueError("没有处理任何batch数据")
+        
     all_preds = np.concatenate([m['preds'] for m in batch_metrics])
     all_scores = np.concatenate([m['scores'] for m in batch_metrics])
     all_labels = np.concatenate([m['labels'] for m in batch_metrics])
@@ -201,24 +185,25 @@ def evaluate_model(model, data_loader):
 
 def compute_metrics(pred_ids, scores, labels):
     """计算评估指标"""
-    # 翻转预测和真实标签，使其符合正确的定义（0为正样本，1为负样本）
-    pred_ids_inv = 1 - pred_ids
-    labels_inv = 1 - labels
-    scores_inv = 1 - scores
+    precision = precision_score(labels, pred_ids)
+    recall = recall_score(labels, pred_ids)
+    f1 = f1_score(labels, pred_ids)
+    accuracy = accuracy_score(labels, pred_ids)
     
-    precision = precision_score(labels_inv, pred_ids_inv)
-    recall = recall_score(labels_inv, pred_ids_inv)
-    f1 = f1_score(labels_inv, pred_ids_inv)
-    accuracy = accuracy_score(labels_inv, pred_ids_inv)
-    
-    fpr, tpr, _ = metrics.roc_curve(labels_inv, scores_inv)
+    fpr, tpr, thresholds = metrics.roc_curve(labels, scores)
     auc = metrics.auc(fpr, tpr)
     
-    return precision, recall, f1, accuracy, auc, fpr, tpr
+    # 计算EER
+    fnr = 1 - tpr
+    # 找到FPR和FNR最接近的点
+    eer_threshold = thresholds[np.nanargmin(np.absolute(fnr - fpr))]
+    EER = fpr[np.nanargmin(np.absolute(fnr - fpr))]
+    
+    return precision, recall, f1, accuracy, auc, fpr, tpr, EER
 
 def plot_combined_metrics(original_results, new_results):
     """绘制组合指标可视化"""
-    metrics_names = ['Recall', 'Accuracy', 'Precision', 'F1', 'AUC']
+    metrics_names = ['Recall', 'Accuracy', 'Precision', 'F1', 'AUC', 'EER']
     original_values = [original_results[k.lower()] for k in metrics_names]
     new_values = [new_results[k.lower()] for k in metrics_names]
 
@@ -241,7 +226,6 @@ def plot_combined_metrics(original_results, new_results):
                             f'combined_metrics_user{Config.USER_ID}_window{Config.WINDOW_SIZE}.png')
     plt.savefig(save_path)
     plt.close()
-
 
 def plot_combined_roc(original_data, new_data):
     """绘制组合ROC曲线"""
@@ -272,55 +256,49 @@ def plot_combined_roc(original_data, new_data):
     plt.savefig(save_path)
     plt.close()
 
-def verify_label_distribution(loader, dataset_name=""):
-    """验证标签分布"""
-    labels = torch.cat([batch[1] for batch in loader])
-    unique, counts = torch.unique(labels, return_counts=True)
-    print(f"\n{dataset_name} 标签分布:")
-    for label, count in zip(unique, counts):
-        print(f"标签 {label}: {count} 个样本 ({count/len(labels)*100:.2f}%)")
-    return counts
-
 def run_testing():
     """主测试函数"""
     try:
-        # 确保目录存在
         ensure_directories()
+        X_orig, y_orig = load_test_data()
         
-        # 加载测试数据
-        X_test_loader = load_test_data()
-        print("\n验证原始测试数据标签分布:")
-        verify_label_distribution(X_test_loader, "原始测试数据")
+        if X_orig.shape[0] == 0 or y_orig.shape[0] == 0:
+            raise ValueError("原始数据集为空")
+
+        num_neg_samples = int((y_orig == 1).sum().item())
+        X_insert, label_insert = load_new_test_data(num_neg_samples)
         
-        # 加载新测试数据
-        X_insert, label_insert = load_new_test_data()
+        if X_insert.shape[0] == 0 or label_insert.shape[0] == 0:
+            raise ValueError("新插入数据集为空")
         
-        # 获取数据形状
-        shape_single_mouse_traj = read_test_data_shape(X_test_loader)
-        new_test_dataloader = insert_new_test_data(X_test_loader, X_insert, label_insert)
-        print("\n验证合并后数据标签分布:")
-        verify_label_distribution(new_test_dataloader, "合并后数据")
+        X_combined = torch.cat([X_orig, X_insert])
+        y_combined = torch.cat([y_orig, label_insert])
         
-        # 初始化和加载模型
-        model = MouseNeuralNetwork(shape_single_mouse_traj[2]).to(Config.DEVICE)
+        print("\n 创建数据加载器...")
+        try:
+            print("创建原始数据加载器...")
+            orig_test_loader = create_balanced_dataloader(X_orig, y_orig, Config.BATCH_SIZE)
+            
+            print("\n创建合并数据加载器...")
+            combined_test_loader = create_balanced_dataloader(X_combined, y_combined, Config.BATCH_SIZE)
+        except Exception as e:
+            raise ValueError(f"创建数据加载器失败: {str(e)}")
+        
+        shape_single_mouse_traj = X_orig.shape[2]
+        model = MouseNeuralNetwork(shape_single_mouse_traj).to(Config.DEVICE)
         model_path = os.path.join(Config.BASE_PATH, 
-                                f'数据处理代码/gru-only-adam-user{Config.USER_ID}_{Config.WINDOW_SIZE}-path.pt')
+                                f'pt/gru-only-adam-user{Config.USER_ID}_{Config.WINDOW_SIZE}-path.pt')
         checkpoint = torch.load(model_path, map_location=Config.DEVICE, weights_only=True)
         model.load_state_dict(checkpoint['model'])
         
-        # 评估原始测试集
-        print("\nEvaluating original test set:")
-        pred_ids_orig, scores_orig, labels_orig = evaluate_model(model, X_test_loader)
+        pred_ids_orig, scores_orig, labels_orig = evaluate_model(model, orig_test_loader)
         metrics_orig = compute_metrics(pred_ids_orig, scores_orig, labels_orig)
-        precision_orig, recall_orig, f1_orig, acc_orig, auc_orig, fpr_orig, tpr_orig = metrics_orig
+        precision_orig, recall_orig, f1_orig, acc_orig, auc_orig, fpr_orig, tpr_orig, eer_orig = metrics_orig
         
-        # 评估新测试集
-        print("\nEvaluating new test set:")
-        pred_ids_new, scores_new, labels_new = evaluate_model(model, new_test_dataloader)
+        pred_ids_new, scores_new, labels_new = evaluate_model(model, combined_test_loader)
         metrics_new = compute_metrics(pred_ids_new, scores_new, labels_new)
-        precision_new, recall_new, f1_new, acc_new, auc_new, fpr_new, tpr_new = metrics_new
+        precision_new, recall_new, f1_new, acc_new, auc_new, fpr_new, tpr_new, eer_new = metrics_new
         
-        # 准备结果
         original_results = {
             'user_id': f'user{Config.USER_ID}',
             'window_size': Config.WINDOW_SIZE,
@@ -328,7 +306,8 @@ def run_testing():
             'accuracy': acc_orig,
             'precision': precision_orig,
             'f1': f1_orig,
-            'auc': auc_orig
+            'auc': auc_orig,
+            'eer': eer_orig
         }
         
         new_results = {
@@ -338,25 +317,22 @@ def run_testing():
             'accuracy': acc_new,
             'precision': precision_new,
             'f1': f1_new,
-            'auc': auc_new
+            'auc': auc_new,
+            'eer': eer_new
         }
         
-        # 保存结果
         save_results_to_csv(original_results, 'original_test')
         save_results_to_csv(new_results, 'new_test')
         
-        # 绘制结果
         plot_combined_roc(
             (fpr_orig, tpr_orig, auc_orig),
             (fpr_new, tpr_new, auc_new)
         )
         plot_combined_metrics(original_results, new_results)
         
-        # 打印结果比较
-        print("\nResults Comparison:")
-        print("Metric       Original Test    New Test")
+        print("\nMetric       Original Test    New Test")
         print("-" * 45)
-        metrics = ['Precision', 'Recall', 'F1', 'Accuracy', 'AUC']
+        metrics = ['Precision', 'Recall', 'F1', 'Accuracy', 'AUC', 'EER']
         for metric in metrics:
             orig_value = original_results[metric.lower()]
             new_value = new_results[metric.lower()]
@@ -365,10 +341,12 @@ def run_testing():
         return True
         
     except Exception as e:
-        print(f"Error in testing: {str(e)}")
+        print(f"\n错误: {str(e)}")
+        print(f"错误类型: {type(e).__name__}")
+        print("详细错误信息:")
+        import traceback
+        traceback.print_exc()
         raise
 
 if __name__ == "__main__":
     run_testing()
-
-
