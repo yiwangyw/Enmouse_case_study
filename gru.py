@@ -71,40 +71,74 @@ def create_dataloaders(train_dataset, val_dataset, test_dataset):
     
     return train_loader, val_loader, test_loader
 
+    
 class FocalLoss(nn.Module):
-    def __init__(self, gamma=2, reduction='mean'):
+    def __init__(self, alpha=0.11, gamma=2.0):
         super(FocalLoss, self).__init__()
+        self.alpha = alpha
         self.gamma = gamma
-        self.reduction = reduction
+        self.eps = 1e-7
 
     def forward(self, inputs, targets):
-        ce_loss = F.cross_entropy(inputs, targets, reduction='none')
-        pt = torch.exp(-ce_loss)
-        focal_loss = ((1 - pt) ** self.gamma * ce_loss)
+        # 数据验证
+        assert inputs.dim() == 2 or inputs.dim() == 1
+        assert targets.dim() == 1 or targets.dim() == 2
+
+        # 获取sigmoid后的预测概率
+        p = torch.sigmoid(inputs)
+        p = torch.clamp(p, self.eps, 1.0 - self.eps)
         
-        if self.reduction == 'mean':
-            return focal_loss.mean()
-        elif self.reduction == 'sum':
-            return focal_loss.sum()
-        return focal_loss
+        # 统一维度处理
+        targets = targets.float()
+        if inputs.size(1) == 2:
+            p = p[:, 1].unsqueeze(1)
+        if targets.dim() > 1:
+            targets = targets.squeeze()
+            
+        # 计算交叉熵
+        ce_loss = -targets * torch.log(p) - (1 - targets) * torch.log(1 - p)
+        
+        # 计算权重
+        weights = torch.where(targets == 1, 
+                            self.alpha * torch.pow(1 - p, self.gamma),
+                            (1 - self.alpha) * torch.pow(p, self.gamma))
+        
+        # 添加数值稳定性检查
+        if torch.isnan(weights).any() or torch.isinf(weights).any():
+            print("Warning: NaN or Inf detected in weights")
+            weights = torch.nan_to_num(weights, nan=0.0, posinf=1.0, neginf=0.0)
+            
+        focal_loss = weights * ce_loss
+        return focal_loss.mean()
 
 def train_model(model, train_loader, val_loader, optimizer):
     """Train the GRU model"""
     model = model.to(Config.DEVICE)
     writer = SummaryWriter('/data/yanbo.wang/CCS2025/Enmouse_case_study/new/tf-logs')
     
-    # ʹ��Focal Loss���CrossEntropyLoss����ʹ��class weights
-    loss_function = FocalLoss(gamma=2)
-    print(f"Using Focal Loss with gamma=2")    
+    # 初始化 Focal Loss
+    loss_function = FocalLoss(alpha=0.11, gamma=2.0)
+    print(f"Using Focal Loss with gamma=1")
+    
+    if optimizer is None:
+        optimizer = torch.optim.Adam(model.parameters(), 
+                                   lr=Config.LEARNING_RATE,
+                                   weight_decay=Config.WEIGHT_DECAY)
     
     loss_history = []
     val_acc_history = []
     train_acc_history = []
-    epochs = list(range(1, Config.NUM_EPOCHS + 1))
+    epochs = list(range(1, Config.GRU_NUM_EPOCHS + 1))
     
-    epoch_pbar = tqdm(range(Config.NUM_EPOCHS), desc='Training Progress')    
+    # 初始化早停变量
+    best_val_loss = float('inf')
+    best_model = None
+    patience = 10
+    patience_counter = 0
+    
+    epoch_pbar = tqdm(range(Config.GRU_NUM_EPOCHS), desc='Training Progress')
+    
     for epoch in epoch_pbar:
-        # Training phase
         model.train()
         total_loss = 0
         correct = 0
@@ -120,16 +154,23 @@ def train_model(model, train_loader, val_loader, optimizer):
             labels = labels.to(Config.DEVICE)
             
             optimizer.zero_grad()
-            outputs = model(inputs).squeeze()
+            outputs = model(inputs)
+            
+            # 如果输出是 [batch_size, 2]，取第二列的预测概率
+            if outputs.size(1) == 2:
+                predicted_probs = torch.sigmoid(outputs[:, 1])
+            else:
+                predicted_probs = torch.sigmoid(outputs.squeeze())
+            
             loss = loss_function(outputs, labels)
             
             loss.backward()
             optimizer.step()
             
             total_loss += loss.item()
-            _, predicted = torch.max(outputs, 1)
-            correct += (predicted == labels).sum().item()
+            predicted = (predicted_probs > 0.5).float()
             total += labels.size(0)
+            correct += (predicted == labels).sum().item()
             
             batch_pbar.set_postfix({
                 'loss': f'{loss.item():.4f}',
@@ -144,6 +185,7 @@ def train_model(model, train_loader, val_loader, optimizer):
             
             # Validation phase
             model.eval()
+            val_loss = 0
             val_correct = 0
             val_total = 0
             
@@ -154,31 +196,60 @@ def train_model(model, train_loader, val_loader, optimizer):
                         
                     inputs = inputs.to(Config.DEVICE)
                     labels = labels.to(Config.DEVICE)
-                    outputs = model(inputs).squeeze()
-                    _, predicted = torch.max(outputs, 1)
-                    val_correct += (predicted == labels).sum().item()
+                    outputs = model(inputs)
+                    
+                    # 如果输出是 [batch_size, 2]，取第二列的预测概率
+                    if outputs.size(1) == 2:
+                        predicted_probs = torch.sigmoid(outputs[:, 1])
+                    else:
+                        predicted_probs = torch.sigmoid(outputs.squeeze())
+                    
+                    val_batch_loss = loss_function(outputs, labels)
+                    val_loss += val_batch_loss.item()
+                    
+                    predicted = (predicted_probs > 0.5).float()
                     val_total += labels.size(0)
+                    val_correct += (predicted == labels).sum().item()
+            
+            val_loss = val_loss / len(val_loader)
+            
+            # 早停检查
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                best_model = model.state_dict().copy()
+                patience_counter = 0
+            else:
+                patience_counter += 1
+            
+            if patience_counter >= patience:
+                print(f"\nEarly stopping triggered at epoch {epoch+1}")
+                model.load_state_dict(best_model)
+                break
+            
+            if val_total > 0:
+                val_accuracy = val_correct / val_total
+                val_acc_history.append(val_accuracy)
                 
-                if val_total > 0:
-                    val_acc = val_correct / val_total
-                    val_acc_history.append(val_acc)
-                    
-                    writer.add_scalar('Loss/train', epoch_loss, epoch)
-                    writer.add_scalar('Accuracy/train', train_acc, epoch)
-                    writer.add_scalar('Accuracy/val', val_acc, epoch)
-                    
-                    epoch_pbar.set_postfix({
-                        'loss': f'{epoch_loss:.4f}',
-                        'train_acc': f'{train_acc:.4f}',
-                        'val_acc': f'{val_acc:.4f}'
-                    })
+                writer.add_scalar('Loss/train', epoch_loss, epoch)
+                writer.add_scalar('Loss/val', val_loss, epoch)
+                writer.add_scalar('Accuracy/train', train_acc, epoch)
+                writer.add_scalar('Accuracy/val', val_accuracy, epoch)
+                
+                epoch_pbar.set_postfix({
+                    'loss': f'{epoch_loss:.4f}',
+                    'val_loss': f'{val_loss:.4f}',
+                    'train_acc': f'{train_acc:.4f}',
+                    'val_acc': f'{val_accuracy:.4f}'
+                })
+    
+    writer.close()
     
     # Plot and save training metrics
     plt.figure(figsize=(12, 8))
     
     # Plot training loss
     plt.subplot(2, 1, 1)
-    plt.plot(epochs, loss_history, 'b-', label='Training Loss')
+    plt.plot(epochs[:len(loss_history)], loss_history, 'b-', label='Training Loss')
     plt.title('Training Loss Over Epochs')
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
@@ -187,9 +258,8 @@ def train_model(model, train_loader, val_loader, optimizer):
     
     # Plot accuracies
     plt.subplot(2, 1, 2)
-    plt.plot(epochs, train_acc_history, 'g-', label='Training Accuracy')
-    if val_loader is not None:
-        plt.plot(epochs, val_acc_history, 'r-', label='Validation Accuracy')
+    plt.plot(epochs[:len(train_acc_history)], train_acc_history, 'g-', label='Training Accuracy')
+    plt.plot(epochs[:len(val_acc_history)], val_acc_history, 'r-', label='Validation Accuracy')
     plt.title('Training and Validation Accuracy Over Epochs')
     plt.xlabel('Epoch')
     plt.ylabel('Accuracy')
@@ -198,24 +268,22 @@ def train_model(model, train_loader, val_loader, optimizer):
     
     plt.tight_layout()
     
-    # Save the plot
     save_path = os.path.join(Config.get_Gruloss_path(), 
                             f'gru_training_metrics_user{Config.USER_ID}_window{Config.WINDOW_SIZE}.png')
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     plt.savefig(save_path)
     plt.close()
     
-    # Save metrics data
     metrics_save_path = os.path.join(Config.get_Gruloss_path(), 
                                    f'gru_training_metrics_user{Config.USER_ID}_window{Config.WINDOW_SIZE}.npz')
     np.savez(metrics_save_path, 
              loss_history=loss_history,
              train_acc_history=train_acc_history,
-             val_acc_history=val_acc_history if val_loader is not None else [],
-             epochs=epochs)
+             val_acc_history=val_acc_history,
+             epochs=epochs[:len(loss_history)])
     
-    writer.close()
     return model, optimizer, loss_history, val_acc_history, train_acc_history
+    
 def run_gru_training():
     """Main GRU training function"""
     try:
@@ -268,7 +336,7 @@ def run_gru_training():
                                f'pt/gru-only-adam-user{Config.USER_ID}_{Config.WINDOW_SIZE}-path.pt')
         torch.save({
             'model': model.state_dict(),
-            'epoch': Config.NUM_EPOCHS
+            'epoch': Config.GRU_NUM_EPOCHS
         }, save_path)
         print(f"GRU model saved to: {save_path}")
         

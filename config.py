@@ -5,9 +5,10 @@ class Config:
     USER_ID = 9
     WINDOW_SIZE = 1
     BASE_PATH = "/data/yanbo.wang/CCS2025/Enmouse_case_study/new/"
-    BATCH_SIZE = 512
+    BATCH_SIZE = 256
     RANDOM_SEED = 123  #0 7 42 123 3407  ��������
-    NUM_EPOCHS = 200
+    Resnet_NUM_EPOCHS = 50
+    GRU_NUM_EPOCHS = 50
     LEARNING_RATE = 1e-3
     WEIGHT_DECAY = 1e-3
     DEVICE = torch.device('cuda:4' if torch.cuda.is_available() else 'cpu')

@@ -56,7 +56,7 @@ def main():
     print("Starting pipeline execution...")
     
     # Define the different window sizes and user IDs to test
-    window_sizes =  list(range(10, 101, 10))  
+    window_sizes =  list(range(10, 301, 10))  
     # window_sizes = [10]
     user_ids = [20]      
     # Run pipeline for each combination

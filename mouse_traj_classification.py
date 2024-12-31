@@ -34,17 +34,23 @@ class MouseNeuralNetwork(nn.Module):
         self.fc = nn.Linear(40, 20)   #全连接
         self.relu = nn.ReLU()
         self.fc2 = nn.Linear(self.sizeof_x, 2)
-        self.dr1 = nn.Dropout(0.2)
+        self.dr1 = nn.Dropout(0.4)
         self.dr2 = nn.Dropout(0.25)
-        self.rnn = nn.GRU(32,self.num_hidden_layer_gru,3,False,True,bidirectional = False)
+        self.rnn = nn.GRU(
+    input_size=16,
+    hidden_size=self.num_hidden_layer_gru,
+    num_layers=3,
+    batch_first=False,
+    bidirectional=False  # 改为True
+)       
         self.sig = nn.Sigmoid()
         self.flatten = nn.Flatten(1)
     def forward(self, input):
         x = self.relu(self.bn0(self.conv0(input)))
         x = self.layer1(x)
         x = self.dr1(x)
-        x = self.layer2(x)
-        x = self.dr1(x)
+        # x = self.layer2(x)
+        # x = self.dr1(x)
         # x = self.layer3(x)
         # x = self.dr1(x)
         # x = self.layer4(x)
@@ -79,7 +85,7 @@ class MouseNeuralNetwork2(nn.Module):
         self.fc = nn.Linear(self.sizeof_x, 300)   #全连接 我试试300改成100
         self.relu = nn.ReLU()
         self.fc2 = nn.Linear(300, 2)
-        self.dr1 = nn.Dropout(0.2)
+        self.dr1 = nn.Dropout(0.4)
         self.dr2 = nn.Dropout(0.25)
     def forward(self, input):
         x = self.relu(self.bn0(self.conv0(input)))
@@ -100,7 +106,7 @@ class MouseNeuralNetwork2(nn.Module):
         
         x = self.fc(x)
         x = self.fc2(x)
-        x = F.softmax(x, dim=1 )
+        # x = F.softmax(x, dim=1 )
         ########################    END   ##########################
 
         return x
