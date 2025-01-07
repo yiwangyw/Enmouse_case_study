@@ -161,7 +161,6 @@ def train_ADAM(model, train_loader, val_loader=None, optimizer=None):
     # 早停相关参数
     best_val_loss = float('inf')
     patience = 10
-    min_delta = 1e-4
     min_epochs = 20
     stagnation_counter = 0
     best_model_state = None
@@ -227,39 +226,34 @@ def train_ADAM(model, train_loader, val_loader=None, optimizer=None):
 
         # 更新最佳模型（无论是否达到最小训练轮数）
         if current_val_loss < best_val_loss:
-            relative_improvement = (best_val_loss - current_val_loss) / best_val_loss if best_val_loss != float('inf') else float('inf')
-            
-            if best_val_loss == float('inf') or relative_improvement > min_delta:
-                print(f'Epoch {epoch+1}: Validation loss improved from {best_val_loss:.6f} to {current_val_loss:.6f}')
-                best_val_loss = current_val_loss
-                best_val_acc = val_accuracy
-                stagnation_counter = 0
-                best_epoch = epoch
-                best_model_state = model.state_dict()
-                
-                # 保存最佳模型
-                torch.save({
-                    'epoch': epoch,
-                    'model_state_dict': model.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'val_loss': best_val_loss,
-                    'val_acc': val_accuracy
-                }, 'best_model.pth')
-            else:
-                stagnation_counter += 1
-                print(f'Epoch {epoch+1}: Validation loss improved but below threshold. '
-                      f'Stagnation counter: {stagnation_counter}/{patience}')
+            print(f'Epoch {epoch+1}: Validation loss improved from {best_val_loss:.6f} to {current_val_loss:.6f}')
+            best_val_loss = current_val_loss
+            best_val_acc = val_accuracy
+            stagnation_counter = 0
+            best_epoch = epoch
+            best_model_state = model.state_dict()
+
+            # 保存最佳模型到本地（可根据需要调整文件名和保存内容）
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'val_loss': best_val_loss,
+                'val_acc': val_accuracy
+            }, 'best_model.pth')
         else:
+            # 否则计数器+1
             stagnation_counter += 1
             print(f'Epoch {epoch+1}: No improvement in validation loss. '
                   f'Stagnation counter: {stagnation_counter}/{patience}')
-        
-        # 只有在达到最小训练轮数后才考虑早停
+
+        # 只有在达到最小训练轮数后，且连续 patience 轮无改进时，才考虑早停
         if epoch >= min_epochs and stagnation_counter >= patience:
             print(f'\nEarly stopping triggered after {patience} epochs with insufficient improvement')
             print(f'Best validation loss: {best_val_loss:.6f} at epoch {best_epoch+1}')
             print(f'Best validation accuracy: {best_val_acc:.4f}')
-            
+
+            # 在触发早停后，加载回之前记录的最佳模型权重
             if best_model_state is not None:
                 model.load_state_dict(best_model_state)
             break
